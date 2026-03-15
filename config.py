@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
 
     # Text LLM — handles question answering
-    llm_model: str = "llama3.1:8b"
+    llm_model: str = "llama3.2:3b"
 
     # Vision LLM — handles image captioning from PDFs
     vlm_model: str = "llava-phi3"
@@ -58,11 +58,11 @@ class Settings(BaseSettings):
 
     # "cuda" uses your NVIDIA GPU — much faster than CPU
     # Change to "cpu" if you don't have a GPU
-    embedding_device: str = "cuda"
+    embedding_device: str = "auto"
 
     # How many chunks to embed in one GPU batch
     # Larger = faster but uses more VRAM. 32 is safe for 8GB VRAM
-    embedding_batch_size: int = 32
+    embedding_batch_size: int = 16
 
     # bge-m3 outputs 1024-dimensional vectors
     # This must match what you tell Qdrant when creating the collection

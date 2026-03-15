@@ -1,186 +1,250 @@
-"""
-pipeline.py
------------
-Master ingestion pipeline.
-Orchestrates: Parse → Caption → Chunk → Embed → Index (Qdrant + BM25)
+# ingestion/pipeline.py
+# ---------------------
+# Orchestrates the full ingestion pipeline:
+#   PDF → Parse → Chunk → Embed → Store (Qdrant + BM25)
+#
+# This is the single entry point for ingesting medical PDFs.
+# All other ingestion modules (parser, chunker, embedder) are
+# called from here in sequence.
+#
+# Usage:
+#   pipeline = IngestionPipeline()
+#   result = pipeline.run("data/pdfs/")           # whole directory
+#   result = pipeline.run("data/pdfs/paper.pdf")  # single file
 
-Usage:
-    from ingestion.pipeline import IngestionPipeline
-    pipeline = IngestionPipeline()
-    pipeline.ingest("data/raw/paper.pdf")
-"""
+from __future__ import annotations
 
 import logging
-import pickle
-from pathlib import Path
-from langchain_core.documents import Document
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance, VectorParams, PointStruct,
-    Filter, FieldCondition, MatchValue,
-)
-from rank_bm25 import BM25Okapi
+import time
+# time.time() lets us measure how long ingestion takes.
+# Useful for profiling — if ingestion is slow, you know which step to optimize.
 
-from ingestion.pdf_parser import PDFParser
-from ingestion.image_captioner import ImageCaptioner
-from ingestion.chunker import MedicalChunker
-from ingestion.embedder import BGEEmbedder
+from pathlib import Path
+
 from config import settings
+from ingestion.pdf_parser import MedPDFParser, MedDocument
+from ingestion.chunker import MedChunker
+from ingestion.embedder import MedEmbedder
+from ingestion.embedder import get_embedder
+
 
 logger = logging.getLogger(__name__)
 
 
 class IngestionPipeline:
     """
-    End-to-end ingestion pipeline for medical PDFs.
+    Full ingestion pipeline: PDF → Qdrant + BM25.
 
-    Steps:
-    1. PDFParser     → RawPage objects (text + tables + images)
-    2. ImageCaptioner → fills RawImage.caption via LLaVA-Phi3
-    3. MedicalChunker → LangChain Documents with metadata
-    4. BGEEmbedder   → dense float vectors
-    5. Qdrant        → store dense vectors + metadata
-    6. BM25          → build sparse index for hybrid retrieval
+    Wires together the parser, chunker, and embedder.
+    Vector store and BM25 index are lazy-loaded from the
+    retrieval module (written in Sprint 2).
+
+    Design principle: each step is independent and testable.
+    You can call parser, chunker, embedder separately in tests
+    without running the full pipeline.
     """
 
-    def __init__(self, skip_image_captioning: bool = False):
-        logger.info("Initializing ingestion pipeline...")
-        self.parser = PDFParser(extract_images=True, extract_tables=True)
-        self.captioner = ImageCaptioner() if not skip_image_captioning else None
-        self.chunker = MedicalChunker()
-        self.embedder = BGEEmbedder()
-        self.qdrant = self._init_qdrant()
-        self.bm25_index: BM25Okapi | None = None
-        self.bm25_docs: list[Document] = []
+    def __init__(self):
+        # These three are always needed — initialize eagerly
+        self.parser = MedPDFParser()
+        self.chunker = MedChunker()
+        self.embedder = get_embedder()
 
-        # Ensure index dir exists
-        settings.index_dir.mkdir(parents=True, exist_ok=True)
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        # These come from Sprint 2 — lazy load to avoid import errors now
+        self._vector_store = None
+        self._bm25_index = None
+
+    # ── Lazy properties ───────────────────────────────────────────────────────
+
+    @property
+    def vector_store(self):
+        """
+        Lazy-load QdrantStore from retrieval module.
+
+        @property means you access it like an attribute: self.vector_store
+        but it runs this function the first time you access it.
+
+        First access:   imports QdrantStore, creates instance, caches it
+        Later accesses: returns the cached instance (self._vector_store)
+
+        This pattern is called "lazy initialization" — we defer the
+        expensive work (connecting to Qdrant) until it's actually needed.
+        """
+        if self._vector_store is None:
+            from retrieval.vector_store import QdrantStore
+            # This import only runs once — when vector_store is first accessed.
+            # If retrieval/vector_store.py doesn't exist yet, only this line
+            # fails — not the entire pipeline module at import time.
+            self._vector_store = QdrantStore()
+        return self._vector_store
+
+    @property
+    def bm25_index(self):
+        """Lazy-load BM25Index from retrieval module."""
+        if self._bm25_index is None:
+            from retrieval.bm25_index import BM25Index
+            self._bm25_index = BM25Index()
+        return self._bm25_index
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def ingest(self, pdf_path: str | Path) -> dict:
+    def run(self, path: str | Path) -> dict:
         """
-        Full ingestion pipeline for one PDF.
-        Returns a summary dict with stats.
+        Run the full ingestion pipeline on a file or directory.
+
+        Returns a summary dict — useful for logging, API responses,
+        and debugging. Never returns None so callers can always
+        safely access result["status"].
+
+        Args:
+            path: Path to a single PDF file or a directory of PDFs.
+
+        Returns:
+            {
+                "status": "success" | "empty" | "error",
+                "total_chunks": 243,
+                "text_chunks": 198,
+                "table_chunks": 31,
+                "image_chunks": 14,
+                "avg_tokens": 487.2,
+                "elapsed_seconds": 42.3
+            }
         """
-        pdf_path = Path(pdf_path)
-        logger.info(f"Starting ingestion: {pdf_path.name}")
+        path = Path(path)
+        start_time = time.time()
+        # Record start time — we'll subtract at the end to get elapsed
 
-        # Step 1: Parse PDF
-        pages = self.parser.parse(pdf_path)
+        # ── Step 1: Parse ─────────────────────────────────────
+        logger.info("=" * 50)
+        logger.info("STEP 1/4: Parsing PDFs")
+        logger.info("=" * 50)
 
-        # Step 2: Caption images (skipped if captioner is None)
-        if self.captioner:
-            pages = self.captioner.caption_all(pages)
-
-        # Step 3: Chunk into Documents
-        docs = self.chunker.chunk(pages)
-
-        # Step 4: Generate embeddings
-        embeddings = self.embedder.embed_documents(docs)
-
-        # Step 5: Upsert into Qdrant
-        self._upsert_to_qdrant(docs, embeddings)
-
-        # Step 6: Update BM25 index
-        self._update_bm25(docs)
-
-        stats = {
-            "file": pdf_path.name,
-            "pages": len(pages),
-            "documents": len(docs),
-            "text_chunks": sum(1 for d in docs if d.metadata["content_type"] == "text"),
-            "table_chunks": sum(1 for d in docs if d.metadata["content_type"] == "table"),
-            "figure_chunks": sum(1 for d in docs if d.metadata["content_type"] == "figure"),
-        }
-        logger.info(f"Ingestion complete: {stats}")
-        return stats
-
-    def ingest_directory(self, dir_path: str | Path) -> list[dict]:
-        """Ingest all PDFs in a directory."""
-        dir_path = Path(dir_path)
-        pdfs = list(dir_path.glob("*.pdf"))
-        logger.info(f"Found {len(pdfs)} PDFs in {dir_path}")
-        return [self.ingest(pdf) for pdf in pdfs]
-
-    # ── Qdrant ────────────────────────────────────────────────────────────────
-
-    def _init_qdrant(self) -> QdrantClient:
-        """Connect to Qdrant and create collection if needed."""
-        client = QdrantClient(
-            host=settings.qdrant_host,
-            port=settings.qdrant_port,
-        )
-
-        existing = [c.name for c in client.get_collections().collections]
-        if settings.qdrant_collection not in existing:
-            client.create_collection(
-                collection_name=settings.qdrant_collection,
-                vectors_config=VectorParams(
-                    size=settings.embedding_dim,
-                    distance=Distance.COSINE,
-                ),
-            )
-            logger.info(f"Created Qdrant collection: {settings.qdrant_collection}")
+        if path.is_dir():
+            raw_docs = self.parser.parse_directory(path)
+        elif path.is_file():
+            raw_docs = self.parser.parse(path)
         else:
-            logger.info(f"Using existing Qdrant collection: {settings.qdrant_collection}")
+            # Path doesn't exist at all
+            raise FileNotFoundError(f"Path not found: {path}")
 
-        return client
+        if not raw_docs:
+            # Parser ran but produced nothing — warn and exit early.
+            # This happens if the PDF is empty, image-only, or corrupted.
+            logger.warning("No documents parsed. Check your PDF files.")
+            return {"status": "empty", "total_chunks": 0, "elapsed_seconds": 0}
 
-    def _upsert_to_qdrant(self, docs: list[Document], embeddings: list[list[float]]):
-        """Upsert documents and their embeddings into Qdrant."""
-        points = []
-        for i, (doc, vector) in enumerate(zip(docs, embeddings)):
-            # Qdrant point ID: hash of chunk_id for idempotent upserts
-            point_id = abs(hash(doc.metadata["chunk_id"])) % (2**63)
+        logger.info(f"Parsed {len(raw_docs)} raw documents")
 
-            points.append(PointStruct(
-                id=point_id,
-                vector=vector,
-                payload={
-                    "page_content": doc.page_content,
-                    **doc.metadata,
-                },
-            ))
+        # ── Step 2: Chunk ─────────────────────────────────────
+        logger.info("=" * 50)
+        logger.info("STEP 2/4: Chunking documents")
+        logger.info("=" * 50)
 
-        # Batch upsert
-        batch_size = 100
-        for i in range(0, len(points), batch_size):
-            batch = points[i:i + batch_size]
-            self.qdrant.upsert(
-                collection_name=settings.qdrant_collection,
-                points=batch,
-            )
-        logger.info(f"Upserted {len(points)} points to Qdrant")
+        chunks = self.chunker.chunk(raw_docs)
+        stats = self.chunker.get_stats(chunks)
+        # stats = {"total_chunks": 243, "text_chunks": 198, ...}
 
-    # ── BM25 ──────────────────────────────────────────────────────────────────
+        logger.info(f"Chunk stats: {stats}")
 
-    def _update_bm25(self, new_docs: list[Document]):
+        if not chunks:
+            logger.warning("Chunking produced no output.")
+            return {"status": "empty", "total_chunks": 0, "elapsed_seconds": 0}
+
+        # ── Step 3: Embed ─────────────────────────────────────
+        logger.info("=" * 50)
+        logger.info("STEP 3/4: Embedding chunks")
+        logger.info("=" * 50)
+
+        embeddings = self.embedder.embed_documents(chunks)
+        # embeddings is a list of 1024-dim vectors.
+        # len(embeddings) == len(chunks) — guaranteed by embed_documents.
+
+        logger.info(f"Generated {len(embeddings)} embeddings "
+                    f"(dim={len(embeddings[0]) if embeddings else 0})")
+
+        # ── Step 4: Store ─────────────────────────────────────
+        logger.info("=" * 50)
+        logger.info("STEP 4/4: Storing in Qdrant + BM25")
+        logger.info("=" * 50)
+
+        # Store dense vectors in Qdrant
+        self.vector_store.upsert(chunks, embeddings)
+        # upsert = insert if not exists, update if exists.
+        # Safe to call multiple times on the same PDF — no duplicates.
+
+        # Build sparse BM25 index and save to disk
+        self.bm25_index.build(chunks)
+        # BM25 index is rebuilt from scratch each time.
+        # For large document sets we'd do incremental updates —
+        # but rebuild is simpler and correct for now.
+
+        # ── Result ────────────────────────────────────────────
+        elapsed = round(time.time() - start_time, 2)
+
+        result = {
+            "status": "success",
+            "elapsed_seconds": elapsed,
+            **stats,
+            # ** unpacks stats dict into result dict.
+            # Equivalent to manually adding each stats key.
+        }
+
+        logger.info("=" * 50)
+        logger.info(f"Ingestion complete: {result}")
+        logger.info("=" * 50)
+
+        return result
+
+    def run_partial(self, path: str | Path) -> list[MedDocument]:
         """
-        Add new documents to the BM25 index.
-        Persists index to disk for reuse across runs.
+        Run only the parse + chunk steps — no embedding or storing.
+
+        Useful for:
+          - Testing the parser and chunker without needing Qdrant running
+          - Inspecting what chunks look like before committing to the index
+          - Unit testing individual pipeline stages
+
+        Usage:
+            chunks = pipeline.run_partial("data/pdfs/paper.pdf")
+            for chunk in chunks[:5]:
+                print(chunk.content_type, chunk.content[:100])
         """
-        index_path = settings.index_dir / "bm25.pkl"
-        docs_path = settings.index_dir / "bm25_docs.pkl"
+        path = Path(path)
 
-        # Load existing if available
-        if index_path.exists() and docs_path.exists():
-            with open(docs_path, "rb") as f:
-                self.bm25_docs = pickle.load(f)
-            logger.info(f"Loaded existing BM25 index ({len(self.bm25_docs)} docs)")
+        raw_docs = (
+            self.parser.parse_directory(path)
+            if path.is_dir()
+            else self.parser.parse(path)
+        )
+        # Ternary expression:
+        # condition_is_true if condition else condition_is_false
+        # Cleaner than a full if/else for simple assignments.
 
-        # Merge new docs
-        self.bm25_docs.extend(new_docs)
+        chunks = self.chunker.chunk(raw_docs)
+        logger.info(f"Partial run: {len(chunks)} chunks ready (not stored)")
+        return chunks
 
-        # Rebuild index (BM25Okapi requires full rebuild on update)
-        tokenized_corpus = [doc.page_content.lower().split() for doc in self.bm25_docs]
-        self.bm25_index = BM25Okapi(tokenized_corpus)
 
-        # Persist
-        with open(index_path, "wb") as f:
-            pickle.dump(self.bm25_index, f)
-        with open(docs_path, "wb") as f:
-            pickle.dump(self.bm25_docs, f)
+# ─── CLI ──────────────────────────────────────────────────────────────────────
+# Run this file directly to ingest PDFs from the command line:
+#   python -m ingestion.pipeline                         ← uses default pdf_dir
+#   python -m ingestion.pipeline data/pdfs/paper.pdf    ← single file
+#   python -m ingestion.pipeline data/pdfs/             ← whole directory
 
-        logger.info(f"BM25 index updated and saved ({len(self.bm25_docs)} total docs)")
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
+        # Output looks like: 14:23:01 | INFO | STEP 1/4: Parsing PDFs
+    )
+
+    # Use command line argument if provided, else fall back to config default
+    target_path = sys.argv[1] if len(sys.argv) > 1 else str(settings.pdf_dir)
+
+    pipeline = IngestionPipeline()
+    result = pipeline.run(target_path)
+
+    print(f"\nResult: {result}")

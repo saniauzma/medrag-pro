@@ -2,52 +2,45 @@
 name = "medrag-pro"
 version = "0.1.0"
 description = "Production Medical RAG — 100% OSS, 100% Local"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # ── LangChain core ──────────────────────────────────────
     "langchain>=0.2.0",
     "langchain-community>=0.2.0",
-    "langchain-ollama>=0.1.0",      # LangChain ↔ Ollama bridge
-
+    "langchain-ollama>=0.1.0", # LangChain ↔ Ollama bridge
     # ── Local LLM ───────────────────────────────────────────
-    "ollama>=0.2.0",                # Ollama Python client
-    "requests>=2.31.0",            # HTTP calls to Ollama API
-
+    "ollama>=0.2.0", # Ollama Python client
+    "requests>=2.31.0", # HTTP calls to Ollama API
     # ── Embeddings + Reranking (fully local) ─────────────────
     "sentence-transformers>=3.0.0", # BAAI/bge-m3
-    "torch>=2.0.0",                # PyTorch backend for sentence-transformers
-
+    "torch>=2.0.0", # PyTorch backend for sentence-transformers
     # ── PDF Parsing ──────────────────────────────────────────
-    "pymupdf>=1.24.0",             # fitz — fast PDF text + image extraction
-    "pdfplumber>=0.11.0",          # table fallback extractor
-    "camelot-py[cv]>=0.11.0",      # best-in-class table extractor
-    "unstructured[pdf]>=0.14.0",   # layout-aware PDF parsing
-    "Pillow>=10.0.0",              # image processing
-    "tabulate>=0.9.0",             # df.to_markdown() support
-    "pandas>=2.2.0",               # DataFrame for tables
-
+    "pymupdf>=1.24.0", # fitz — fast PDF text + image extraction
+    "pdfplumber>=0.11.0", # table fallback extractor
+    "camelot-py[cv]>=0.11.0", # best-in-class table extractor
+    "unstructured[pdf]>=0.14.0", # layout-aware PDF parsing
+    "Pillow>=10.0.0", # image processing
+    "tabulate>=0.9.0", # df.to_markdown() support
+    "pandas>=2.2.0", # DataFrame for tables
     # ── Vector Store ─────────────────────────────────────────
-    "qdrant-client>=1.9.0",        # Qdrant local/remote client
-
+    "qdrant-client>=1.9.0", # Qdrant local/remote client
     # ── Sparse Retrieval ─────────────────────────────────────
-    "rank-bm25>=0.2.2",            # BM25Okapi implementation
-
+    "rank-bm25>=0.2.2", # BM25Okapi implementation
     # ── Evaluation ───────────────────────────────────────────
-    "ragas>=0.1.9",                # Faithfulness, relevancy, recall
-    "datasets>=2.19.0",            # HuggingFace datasets for eval
-
+    "ragas>=0.1.9", # Faithfulness, relevancy, recall
+    "datasets>=2.19.0", # HuggingFace datasets for eval
     # ── API ──────────────────────────────────────────────────
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
-    "python-multipart>=0.0.9",     # file upload support in FastAPI
-
+    "python-multipart>=0.0.9", # file upload support in FastAPI
     # ── UI ───────────────────────────────────────────────────
     "streamlit>=1.35.0",
-
     # ── Config ───────────────────────────────────────────────
     "pydantic>=2.7.0",
-    "pydantic-settings>=2.2.0",    # .env → Python settings class
+    "pydantic-settings>=2.2.0", # .env → Python settings class
     "python-dotenv>=1.0.0",
+    "langchain-text-splitters>=1.1.1",
+    "urllib3>=2.0.0",
 ]
 
 [tool.uv]
@@ -65,3 +58,17 @@ target-version = "py311"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "ingestion",
+    "retrieval",
+    "reranking",
+    "generation",
+    "evaluation",
+    "api",
+    "ui",
+]
+
+[tool.uv.sources]
+torch = { url = "https://download.pytorch.org/whl/cu124/torch-2.6.0+cu124-cp312-cp312-win_amd64.whl" }
