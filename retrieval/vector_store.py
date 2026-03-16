@@ -267,3 +267,9 @@ class QdrantStore:
         key = f"{chunk.source_file}_{chunk.page_number}_{chunk.chunk_index}"
         md5_hash = hashlib.md5(key.encode()).hexdigest()
         return str(uuid.UUID(md5_hash))
+
+    def delete_collection(self) -> None:
+        """Delete and recreate the collection — use during development to reset."""
+        self.client.delete_collection(self.collection_name)
+        logger.warning(f"Collection '{self.collection_name}' deleted ⚠️")
+        self._ensure_collection()

@@ -346,6 +346,11 @@ class MedPDFParser:
           than the same sentence in "Limitations".
           We store this in section_title for every chunk.
         """
+        SKIP_SECTIONS = {
+            "references", "bibliography", "acknowledgements",
+            "acknowledgments", "funding", "conflicts of interest",
+            "author contributions", "supplementary",
+        }
         docs = []
         doc = fitz.open(str(pdf_path))
 
@@ -402,6 +407,9 @@ class MedPDFParser:
                 # Discard chunks that are too short — likely headers, page numbers,
                 # figure labels ("Fig. 1"), or other noise
                 if len(block_text) < settings.min_chunk_size:
+                    continue
+
+                if current_section.lower() in SKIP_SECTIONS:
                     continue
 
                 docs.append(MedDocument(
