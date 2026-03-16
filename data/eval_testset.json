@@ -1,0 +1,82 @@
+[
+  {
+    "question": "What is the name of the model that demonstrates exceptional performance on CPQExam?",
+    "ground_truth": "QuarkMed",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 15
+  },
+  {
+    "question": "What type of data does the QuarkMed RAG system currently focus on?",
+    "ground_truth": "text-based data",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 17
+  },
+  {
+    "question": "What type of data were used to curate the large-scale corpus?",
+    "ground_truth": "public online medical consultation dialogues and de-identified electronic health records (EHRs)",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 5
+  },
+  {
+    "question": "What is a characteristic of medical language compared to general-domain text?",
+    "ground_truth": "a highly specialized vocabulary",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 1
+  },
+  {
+    "question": "What is the primary purpose of converting structured SPO data into unstructured natural language sentences?",
+    "ground_truth": "ensuring compatibility with the model's processing pipeline",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 4
+  },
+  {
+    "question": "What are the three core dimensions that the Reward Model (RM) holistically evaluates model outputs across?",
+    "ground_truth": "Honesty, Helpfulness, and Content Compliance",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 11
+  },
+  {
+    "question": "What is the name of the medical foundation model introduced in this report?",
+    "ground_truth": "QuarkMed",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 2
+  },
+  {
+    "question": "What is the benefit of using RAG in reducing subtle hallucinations?",
+    "ground_truth": "reduction of subtle hallucinations",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 16
+  },
+  {
+    "question": "What type of quality control measures are used for the medical language model?",
+    "ground_truth": "physician-led spot audits",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 5
+  },
+  {
+    "question": "What type of information is the model taught to cite for building user trust?",
+    "ground_truth": "authoritative sources",
+    "answer": "",
+    "contexts": [],
+    "source_file": "2508.11894v1.pdf",
+    "source_page": 9
+  }
+]

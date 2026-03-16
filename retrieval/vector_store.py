@@ -273,3 +273,15 @@ class QdrantStore:
         self.client.delete_collection(self.collection_name)
         logger.warning(f"Collection '{self.collection_name}' deleted ⚠️")
         self._ensure_collection()
+
+    
+    def get_collection_info(self) -> dict:
+        """Returns info about the current collection — useful for health checks."""
+        info = self.client.get_collection(self.collection_name)
+        return {
+            "name": self.collection_name,
+            "total_points": info.points_count,
+            "status": info.status,
+        "vector_size": info.config.params.vectors.size,
+        "distance": info.config.params.vectors.distance,
+    }
